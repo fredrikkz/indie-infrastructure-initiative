@@ -2,10 +2,8 @@
 
 import sys
 
-from reader import feed, viewer
-
 def main():
-    print("in3 command")
+    print("indie command says hello")
 
 if __name__ == "__main__":
     main()

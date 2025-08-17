@@ -1,7 +1,7 @@
 [project]
 name = "indie"
 version = "0.1.0"
-dependencies = ["tomlkit>=0.13.3", "aiohttp>=:3.12.15"]
+dependencies = ["tomlkit>=0.13.3", "aiohttp>=3.12.15"]
 description = "An initiative to allow small indie gamedev studios to deploy complex server infrastructure with ease"
 readme = "README.md"
 authors = [{ name = "Fredrik Zetterman", email = "fredrik.zetterman@rodengames.com" }]
@@ -21,7 +21,7 @@ dev = ["bumpver"]
 Homepage = "https://github.com/fredrikkz/indie-infrastructure-initiative"
 
 [project.scripts]
-realpython = "indie.__main__:main"
+indie = "indie.__main__:main"
 
 [tool.bumpver]
 current_version = "0.1.0"
