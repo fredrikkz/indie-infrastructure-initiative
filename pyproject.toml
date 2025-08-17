@@ -1,0 +1,21 @@
+[project]
+name = "in3"
+version = "0.1.0"
+dependencies = ["tomlkit>=0.13.3", "aiohttp>=:3.12.15"]
+description = "An initiative to allow small indie gamedev studios to deploy complex server infrastructure with ease"
+readme = "README.md"
+authors = [{ name = "Fredrik Zetterman", email = "fredrik.zetterman@rodengames.com" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["proxmox"]
+requires-python = ">=3.9"
+
+[project.urls]
+Homepage = "https://github.com/fredrikkz/indie-infrastructure-initiative"
+
+[project.scripts]
+realpython = "in3.__main__:main"
