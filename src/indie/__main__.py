@@ -8,6 +8,7 @@ import geocoder
 import tomlkit
 import argparse
 import pycountry
+import validators
 from aiohttp import web
 
 valid_keyboard_layouts = [
@@ -38,6 +39,16 @@ valid_keyboard_layouts = [
     "tr",
 ]
 
+indie_toml_file = "indie.toml"
+indie_toml = tomlkit.document()
+
+
+def write_toml(table: str, data: dict):
+    indie_toml[table] = data
+
+    with open(indie_toml_file, "w", encoding="utf-8") as file:
+        file.write(indie_toml.as_string())
+
 
 def get_keyboard(args):
     selected_keyboard_layout = args.keyboard
@@ -60,7 +71,7 @@ def get_keyboard(args):
 def get_countrycode(args):
     selected_countrycode = str(args.countrycode or "")
     while pycountry.countries.get(alpha_2=selected_countrycode) is None:
-        if selected_countrycode is not "":
+        if selected_countrycode != "":
             print(f"{selected_countrycode} is not a valid countrycode")
         print(
             "Select ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list:"
@@ -72,21 +83,58 @@ def get_countrycode(args):
         do_suggest = False
         if pycountry.countries.get(alpha_2=str(g.country or "")) is not None:
             print(
-                f"(Suggested countrycode is {g.country}, press Enter to accept, or explictly type a countrycode)"
+                f"(Suggested countrycode is {g.country}, press Enter to accept, or explictly enter a countrycode)"
             )
             do_suggest = True
 
-        selected_countrycode = input()
-        if selected_countrycode is "" and do_suggest:
+        selected_countrycode = str(input() or "")
+        if selected_countrycode == "" and do_suggest:
             selected_countrycode = g.country
 
     print(f"Selected countrycode: {selected_countrycode}")
     return selected_countrycode
 
 
+def get_domain(args):
+    selected_domain = args.domain
+    while not validators.domain(selected_domain):
+        if selected_domain is not None:
+            print(f"{selected_domain} is not a valid domain")
+        print("Select domain:")
+
+        selected_domain = input()
+    print(f"Selected domain: {selected_domain}")
+    return selected_domain
+
+
+def get_email(args):
+    selected_email = args.email
+    while not validators.email(selected_email):
+        if selected_email is not None:
+            print(f"{selected_email} is not a valid email")
+        print("Select email:")
+
+        selected_email = input()
+    print(f"Selected email: {selected_email}")
+    return selected_email
+
+
 def command_begin(args):
     selected_keyboard_layout = get_keyboard(args)
     selected_countrycode = get_countrycode(args)
+    selected_domain = get_domain(args)
+    selected_email = get_email(args)
+    write_toml(
+        "indie",
+        {
+            "global": {
+                "keyboard": selected_keyboard_layout,
+                "countrycode": selected_countrycode,
+                "domain": selected_domain,
+                "email": selected_email,
+            }
+        },
+    )
 
 
 def command_addhost(args):
@@ -128,16 +176,25 @@ def main():
         type=validate_countrycode,
         help="ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list.",
     )
+    p_begin.add_argument("--domain")
+    p_begin.add_argument("--email")
+    p_begin.add_argument("--timezone")
     p_begin.set_defaults(func=command_begin)
 
     # addhost
     p_addhost = subparsers.add_parser(
         "addhost", help="Add a new physical host machine to the infrastructure"
     )
-    p_addhost.add_argument("-n", "--hostname", required=True)
     p_addhost.set_defaults(func=command_addhost)
 
     args = parser.parse_args()
+
+    try:
+        with open(indie_toml_file, "r", encoding="utf-8") as file:
+            indie_toml = tomlkit.load(file)
+    except FileNotFoundError:
+        pass
+
     args.func(args)
 
 

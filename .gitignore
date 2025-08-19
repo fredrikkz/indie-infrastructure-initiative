@@ -1,3 +1,4 @@
+indie.toml
 .venv/
 dist/
 src/indie/__pycache__/
