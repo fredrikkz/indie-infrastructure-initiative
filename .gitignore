@@ -1,1 +1,4 @@
 .venv/
+dist/
+src/indie/__pycache__/
+src/indie.egg-info/
