@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+# NOTE: Script is based on the example script found here: https://pve.proxmox.com/wiki/Automated_Installation
+
 import logging
 import json
 import pathlib
