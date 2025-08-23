@@ -11,8 +11,10 @@ import argparse
 import pycountry
 import validators
 import tzlocal
+import getpass
 from zoneinfo import available_timezones
 from aiohttp import web
+from passlib.hash import sha512_crypt
 
 valid_keyboard_layouts = [
     "de",
@@ -104,23 +106,23 @@ def get_domain(args):
     while not validators.domain(selected_domain):
         if selected_domain is not None:
             print(f"{selected_domain} is not a valid domain")
-        print("Select domain:")
+        print("Select domain (for example, 'example.com'):")
 
         selected_domain = input()
     print(f"Selected domain: {selected_domain}")
     return selected_domain
 
 
-def get_email(args):
-    selected_email = args.email
-    while not validators.email(selected_email):
-        if selected_email is not None:
-            print(f"{selected_email} is not a valid email")
+def get_mailto(args):
+    selected_mailto = args.mailto
+    while not validators.email(selected_mailto):
+        if selected_mailto is not None:
+            print(f"{selected_mailto} is not a valid email")
         print("Select email:")
 
-        selected_email = input()
-    print(f"Selected email: {selected_email}")
-    return selected_email
+        selected_mailto = input()
+    print(f"Selected email: {selected_mailto}")
+    return selected_mailto
 
 
 def get_timezone(args):
@@ -129,7 +131,9 @@ def get_timezone(args):
     while selected_timezone not in available_timezones():
         if selected_timezone is not None:
             print(f"{selected_timezone} is not a valid timezone")
-        print("Select timezone:")
+        print(
+            "Select timezone (in IANA time zone database 'Area/Location' format, for example 'Europe/Stockholm'):"
+        )
 
         suggested_timezone = str(tzlocal.get_localzone())
 
@@ -147,12 +151,42 @@ def get_timezone(args):
     return selected_timezone
 
 
+def validate_password_hash(password):
+    if password is None:
+        return False
+    subparts = password.split("$")
+    if 4 <= len(subparts) <= 5:
+        if subparts[1] != "6":  # 6 == sha512
+            return False
+        if len(subparts) == 5 and not subparts[2].startswith("rounds="):
+            return False
+        return True
+    return False
+
+
+def get_password(args):
+    selected_password = args.root_password_hashed
+
+    while not validate_password_hash(selected_password):
+        if selected_password is not None:
+            print(f"{selected_password} is not a valid password hash")
+        print("Enter desired 'root' user password:")
+        selected_password = sha512_crypt.hash(getpass.getpass())
+        print("Repeat desired 'root' user password:")
+        if not sha512_crypt.verify(getpass.getpass(), selected_password):
+            print("Entered passwords didn't match, try again")
+            selected_password = None
+    print(f"Selected password hash: {selected_password}")
+    return selected_password
+
+
 def command_begin(args):
+    selected_domain = get_domain(args)
+    selected_mailto = get_mailto(args)
     selected_keyboard_layout = get_keyboard(args)
     selected_countrycode = get_countrycode(args)
-    selected_domain = get_domain(args)
-    selected_email = get_email(args)
     selected_timezone = get_timezone(args)
+    selected_password = get_password(args)
     write_toml(
         "indie",
         {
@@ -160,8 +194,9 @@ def command_begin(args):
                 "keyboard": selected_keyboard_layout,
                 "countrycode": selected_countrycode,
                 "domain": selected_domain,
-                "email": selected_email,
+                "mailto": selected_mailto,
                 "timezone": selected_timezone,
+                "root-password-hashed": selected_password,
             }
         },
     )
@@ -225,9 +260,24 @@ def main():
         help="ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list.",
         default=get_toml_default("countrycode"),
     )
-    p_begin.add_argument("--domain", default=get_toml_default("domain"))
-    p_begin.add_argument("--email", default=get_toml_default("email"))
-    p_begin.add_argument("--timezone", default=get_toml_default("timezone"))
+    p_begin.add_argument(
+        "--domain",
+        default=get_toml_default("domain"),
+        help="Domain name to use, for example 'example.com'",
+    )
+    p_begin.add_argument(
+        "--mailto", default=get_toml_default("mailto"), help="Administrator email"
+    )
+    p_begin.add_argument(
+        "--timezone",
+        default=get_toml_default("timezone"),
+        help="Timezone from the IANA time zone database in the 'Area/Location' format, for example 'Europe/Stockholm'",
+    )
+    p_begin.add_argument(
+        "--root-password-hashed",
+        default=get_toml_default("root-password-hashed"),
+        help="SHA512 password hash, compatible with '/etc/shadow'",
+    )
     p_begin.set_defaults(func=command_begin)
 
     # addhost
