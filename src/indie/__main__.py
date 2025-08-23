@@ -48,12 +48,29 @@ indie_toml_file = ".indie/indie.toml"
 indie_toml = tomlkit.document()
 
 
-def write_toml(table: str, data: dict):
-    indie_toml[table] = data
+def write_toml(data: dict):
+    indie_toml.update(data)
 
     os.makedirs(os.path.dirname(indie_toml_file), exist_ok=True)
     with open(indie_toml_file, "w", encoding="utf-8") as file:
         file.write(indie_toml.as_string())
+
+
+def get_toml_default(key):
+    try:
+        return indie_toml["global"][key]
+    except KeyError:
+        return None
+
+
+def has_toml_table(*args):
+    local = indie_toml
+    for arg in args:
+        try:
+            local = local[arg]
+        except KeyError:
+            return False
+    return True
 
 
 def get_keyboard(args):
@@ -181,29 +198,137 @@ def get_password(args):
 
 
 def command_begin(args):
-    selected_domain = get_domain(args)
-    selected_mailto = get_mailto(args)
-    selected_keyboard_layout = get_keyboard(args)
-    selected_countrycode = get_countrycode(args)
-    selected_timezone = get_timezone(args)
-    selected_password = get_password(args)
+    begin_dict = {
+        "domain": get_domain(args),
+        "mailto": get_mailto(args),
+        "keyboard": get_keyboard(args),
+        "countrycode": get_countrycode(args),
+        "timezone": get_timezone(args),
+        "root-password-hashed": get_password(args),
+    }
     write_toml(
-        "indie",
-        {
-            "global": {
-                "keyboard": selected_keyboard_layout,
-                "countrycode": selected_countrycode,
-                "domain": selected_domain,
-                "mailto": selected_mailto,
-                "timezone": selected_timezone,
-                "root-password-hashed": selected_password,
-            }
-        },
+        {"global": begin_dict},
     )
 
 
+def get_hostname(args, domain):
+    selected_hostname = args.hostname
+    while not validators.domain(
+        (selected_hostname or "") + "." + domain
+    ) or has_toml_table("host", selected_hostname):
+        if selected_hostname is not None:
+            if not validators.domain((selected_hostname or "") + "." + domain):
+                print(f"{selected_hostname + '.' + domain} is not a valid domain")
+            elif has_toml_table("host", selected_hostname):
+                print(f"'{selected_hostname}' already in use")
+        print("Select hostname:")
+
+        selected_hostname = input()
+    print(
+        f"Selected hostname: {selected_hostname}, FQDN becomes '{selected_hostname + '.' + domain}'"
+    )
+    return selected_hostname
+
+
+# TODO: Also validate that the MAC address isn't used by any other hosts
+def get_macaddress(args):
+    selected_macaddress = args.macaddress
+    while not validators.mac_address(selected_macaddress):
+        if selected_macaddress is not None:
+            print(f"{selected_macaddress} is not a valid MAC address")
+        print("Select MAC address:")
+
+        selected_macaddress = input()
+    print(f"Selected MAC address: {selected_macaddress}")
+    return selected_macaddress
+
+
+def get_dhcp(args):
+    selected_use_dhcp = args.use_dhcp
+    while not isinstance(selected_use_dhcp, bool):
+        string = (
+            input("Do you want to use DHCP for this host? (yes/no): ").strip().lower()
+        )
+        if "yes".startswith(string):
+            selected_use_dhcp = True
+        elif "no".startswith(string):
+            selected_use_dhcp = False
+    print(f"Selected use DHCP: {selected_use_dhcp}")
+    return selected_use_dhcp
+
+
+def get_cidr(args):
+    selected_cidr = args.cidr
+    while not validators.ip_address.ipv4(selected_cidr, cidr=True, strict=True):
+        if selected_cidr is not None:
+            print(f"{selected_cidr} is not a valid CIDR")
+        print("Select IP address in CIDR format (for example '192.168.1.10/24'):")
+
+        selected_cidr = input()
+    print(f"Selected cidr: {selected_cidr}")
+    return selected_cidr
+
+
+def get_gateway(args):
+    selected_gateway = args.gateway
+    while not validators.ip_address.ipv4(selected_gateway, cidr=False):
+        if selected_gateway is not None:
+            print(f"{selected_gateway} is not a valid IP address")
+        print("Select gateway server IP address (for example '192.168.1.10'):")
+
+        selected_gateway = input()
+    print(f"Selected gateway: {selected_gateway}")
+    return selected_gateway
+
+
+def get_dns(args):
+    selected_dns = args.dns
+    while not validators.ip_address.ipv4(selected_dns, cidr=False):
+        if selected_dns is not None:
+            print(f"{selected_dns} is not a valid IP address")
+        print(
+            "Select DNS server IP address (for example DNS4EU's protective '86.54.11.1'):"
+        )
+
+        selected_dns = input()
+    print(f"Selected dns: {selected_dns}")
+    return selected_dns
+
+
 def command_addhost(args):
-    print("Addhost")
+    begin_dict = {
+        "domain": get_domain(args),
+        "mailto": get_mailto(args),
+        "keyboard": get_keyboard(args),
+        "countrycode": get_countrycode(args),
+        "timezone": get_timezone(args),
+        "root-password-hashed": get_password(args),
+    }
+
+    addhost_dict = {
+        "hostname": get_hostname(args, begin_dict["domain"]),
+        "network": {"macaddress": get_macaddress(args), "use-dhcp": get_dhcp(args)},
+    }
+
+    if not addhost_dict["network"]["use-dhcp"]:
+        addhost_dict["network"] = addhost_dict["network"] | {
+            "cidr": get_cidr(args),
+            "gateway": get_gateway(args),
+            "dns": get_dns(args),
+        }
+
+    # We support running 'addhost' as the first command as well as 'begin', so we alter the global config if it's missing keys
+    to_write = {}
+    for k, v in begin_dict.items():
+        default = get_toml_default(k)
+        if default is None:
+            to_write.setdefault("global", {})[k] = v
+        elif v != default:
+            # local override for this host
+            addhost_dict[k] = v
+
+    to_write.setdefault("host", {})[addhost_dict["hostname"]] = addhost_dict
+    write_toml(to_write)
 
 
 def command_unknown(args, parser):
@@ -216,19 +341,36 @@ def command_unknown(args, parser):
     )
 
 
-def validate_countrycode(value):
-    if pycountry.countries.get(alpha_2=value) is None:
-        raise argparse.ArgumentTypeError(
-            f"{value} is not a valid ISO 3166-1 alpha 2 countrycode"
-        )
-    return value
-
-
-def get_toml_default(key):
-    try:
-        return indie_toml["indie"]["global"][key]
-    except KeyError:
-        return None
+def set_subparser_settings(subparser):
+    subparser.add_argument(
+        "--keyboard",
+        choices=valid_keyboard_layouts,
+        help="Keyboard layout to use.",
+        default=get_toml_default("keyboard"),
+    )
+    subparser.add_argument(
+        "--countrycode",
+        help="ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list.",
+        default=get_toml_default("countrycode"),
+    )
+    subparser.add_argument(
+        "--domain",
+        default=get_toml_default("domain"),
+        help="Domain name to use, for example 'example.com'",
+    )
+    subparser.add_argument(
+        "--mailto", default=get_toml_default("mailto"), help="Administrator email"
+    )
+    subparser.add_argument(
+        "--timezone",
+        default=get_toml_default("timezone"),
+        help="Timezone from the IANA time zone database in the 'Area/Location' format, for example 'Europe/Stockholm'",
+    )
+    subparser.add_argument(
+        "--root-password-hashed",
+        default=get_toml_default("root-password-hashed"),
+        help="SHA512 password hash, compatible with '/etc/shadow'",
+    )
 
 
 def main():
@@ -248,41 +390,38 @@ def main():
     p_begin = subparsers.add_parser(
         "begin", help="Begin the initial setup of the infrastructure"
     )
-    p_begin.add_argument(
-        "--keyboard",
-        choices=valid_keyboard_layouts,
-        help="Keyboard layout to use.",
-        default=get_toml_default("keyboard"),
-    )
-    p_begin.add_argument(
-        "--countrycode",
-        type=validate_countrycode,
-        help="ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list.",
-        default=get_toml_default("countrycode"),
-    )
-    p_begin.add_argument(
-        "--domain",
-        default=get_toml_default("domain"),
-        help="Domain name to use, for example 'example.com'",
-    )
-    p_begin.add_argument(
-        "--mailto", default=get_toml_default("mailto"), help="Administrator email"
-    )
-    p_begin.add_argument(
-        "--timezone",
-        default=get_toml_default("timezone"),
-        help="Timezone from the IANA time zone database in the 'Area/Location' format, for example 'Europe/Stockholm'",
-    )
-    p_begin.add_argument(
-        "--root-password-hashed",
-        default=get_toml_default("root-password-hashed"),
-        help="SHA512 password hash, compatible with '/etc/shadow'",
-    )
+    set_subparser_settings(p_begin)
     p_begin.set_defaults(func=command_begin)
 
     # addhost
     p_addhost = subparsers.add_parser(
         "addhost", help="Add a new physical host machine to the infrastructure"
+    )
+    set_subparser_settings(p_addhost)
+    p_addhost.add_argument(
+        "--hostname",
+        help="Hostname to use, without domain name (domain is automatically appended)",
+    )
+    p_addhost.add_argument(
+        "--macaddress",
+        help="MAC address of the physical machine",
+    )
+    p_addhost.add_argument(
+        "--use-dhcp",
+        type=bool,
+        help="If true, host will use DHCP to resolve network settings",
+    )
+    p_addhost.add_argument(
+        "--cidr",
+        help="If not using DHCP, IP address in CIDR notation, for example 192.168.1.10/24",
+    )
+    p_addhost.add_argument(
+        "--gateway",
+        help="If not using DHCP, IP address of gateway server, for example 192.168.1.10",
+    )
+    p_addhost.add_argument(
+        "--dns",
+        help="If not using DHCP, IP address of DNS server, for example DNS4EU's protective 86.54.11.1",
     )
     p_addhost.set_defaults(func=command_addhost)
 
