@@ -1,3 +1,4 @@
 # Indie Infrastructure Initiative
+A tool to allow small indie game development studios to setup and maintain complex server infrastructure with ease
+
 Version 0.1.3
-An initiative to allow small indie gamedev studios to deploy complex server infrastructure with ease

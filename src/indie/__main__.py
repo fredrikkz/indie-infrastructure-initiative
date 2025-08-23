@@ -15,6 +15,7 @@ import getpass
 from zoneinfo import available_timezones
 from aiohttp import web
 from passlib.hash import sha512_crypt
+from . import __version__
 
 valid_keyboard_layouts = [
     "de",
@@ -375,14 +376,18 @@ def set_subparser_settings(subparser):
 
 def main():
     # Read default values, if possible
+    global indie_toml
     try:
         with open(indie_toml_file, "r", encoding="utf-8") as file:
-            global indie_toml
             indie_toml = tomlkit.load(file)
     except FileNotFoundError:
         pass
 
-    parser = argparse.ArgumentParser()
+    indie_toml.update({"indie":{"version":__version__}})
+    parser = argparse.ArgumentParser(
+        description=f"Indie Infrastructure Initiative\nVersion {__version__}\nhttps://github.com/fredrikkz/indie-infrastructure-initiative\n\nA tool to allow small indie game development studios to setup and maintain complex server infrastructure with ease",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.set_defaults(func=(lambda args, p=parser: command_unknown(args, p)))
     subparsers = parser.add_subparsers(help="Available subcommands")
 
