@@ -88,9 +88,16 @@ def get_proxmox_toml(mac):
 
         host_dict["disk-setup"] = {
             "disk-list": harddrives,
-            "filesystem": "zfs",
-            tomlkit.key(["zfs", "raid"]): "raid1",
         }
+        if host_dict["use-raid1"]:
+            host_dict["disk-setup"] = host_dist["disk-setup"] | {
+                "filesystem": "zfs",
+                tomlkit.key(["zfs", "raid"]): "raid1",
+            }
+        else:
+            host_dict["disk-setup"] = host_dist["disk-setup"] | {
+                "filesystem": "ext4",
+            }
 
         host_dict["first-boot"] = {
             "source": "from-url",
@@ -343,6 +350,20 @@ def get_dns(args):
     return selected_dns
 
 
+def get_raid(args):
+    selected_use_raid = args.use_raid1
+    while not isinstance(selected_use_raid, bool):
+        string = (
+            input("Do you want to use RAID1 for this host? (yes/no): ").strip().lower()
+        )
+        if "yes".startswith(string):
+            selected_use_raid = True
+        elif "no".startswith(string):
+            selected_use_raid = False
+    print(f"Selected use RAID1: {selected_use_raid}")
+    return selected_use_raid
+
+
 def command_addhost(args):
     begin_dict = {
         "domain": get_domain(args),
@@ -357,6 +378,7 @@ def command_addhost(args):
         "hostname": get_hostname(args, begin_dict["domain"]),
         "macaddress": get_macaddress(args),
         "use-dhcp": get_dhcp(args),
+        "use-raid1": get_raid(args),
     }
 
     if not addhost_dict["use-dhcp"]:
@@ -564,6 +586,11 @@ def main():
     p_addhost.add_argument(
         "--dns",
         help="If not using DHCP, IP address of DNS server, for example DNS4EU's protective 86.54.11.1",
+    )
+    p_addhost.add_argument(
+        "--use-raid1",
+        type=bool,
+        help="If true, use RAID1 (requires multiple harddrives or install of host will fail)",
     )
     p_addhost.set_defaults(func=command_addhost)
 
