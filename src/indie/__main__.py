@@ -92,6 +92,11 @@ def get_proxmox_toml(mac):
             tomlkit.key(["zfs", "raid"]): "raid1",
         }
 
+        host_dict["first-boot"] = {
+            "source": "from-url",
+            "url": f"http://indieinstaller.{domain}:8000/proxmox-first-boot",
+        }
+
         proxmox_toml = tomlkit.document()
         proxmox_toml.update(host_dict)
         return proxmox_toml
@@ -378,8 +383,8 @@ def command_addhost(args):
 def command_serve(args):
     routes = web.RouteTableDef()
 
-    @routes.post("/answer")
-    async def answer(request: web.Request):
+    @routes.post("/proxmox-answer")
+    async def proxmox_answer(request: web.Request):
         try:
             request_data = json.loads(await request.text())
         except json.JSONDecodeError as e:
@@ -412,9 +417,56 @@ def command_serve(args):
         print(message)
         return web.Response(status=500, text=f"Internal Server Error: {message}")
 
+    @routes.get("/proxmox-first-boot")
+    async def proxmox_first_boot(request: web.Request):
+        print(f"Request proxmox-first-boot data for peer '{request.remote}':")
+        message = """#!/bin/bash
+set -ex
+
+# Update apt sources
+sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
+sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
+sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
+sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
+apt-get update
+apt-get upgrade -y
+
+# Remove subscription
+"""
+        print(message)
+        return web.Response(text=message)
+
+    @routes.get("/proxmox-create-usb-installer")
+    async def proxmox_create_usb_installer(request: web.Request):
+        print(f"Request proxmox-create-usb-installer for peer '{request.remote}':")
+        iso_name = "proxmox-ve_9.0-1"
+        domain = get_toml_default("domain")
+        message = f"""#!/bin/bash
+set -ex
+if [[ $# -ne 1 ]]; then
+    echo "Illegal number of parameters" >&2
+    exit 2
+fi
+
+apt install proxmox-auto-install-assistant -y
+
+# Prepare USB
+mkfs.vfat -I $1
+fatlabel $1 "AUTOPROXMOX"
+
+# Get ISO
+wget https://enterprise.proxmox.com/iso/{iso_name}.iso
+proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "http://indieinstaller.{domain}:8000/proxmox-answer" --output {iso_name}-auto.iso
+dd bs=1M conv=fdatasync if=./{iso_name}-auto.iso of=$1
+rm {iso_name}.iso
+rm {iso_name}-auto.iso
+"""
+        print(message)
+        return web.Response(text=message)
+
     app = web.Application()
     app.add_routes(routes)
-    web.run_app(app, port=args.port)
+    web.run_app(app, port=8000)
 
 
 def command_unknown(args, parser):
@@ -519,12 +571,6 @@ def main():
     p_serve = subparsers.add_parser(
         "serve",
         help="Starts a webserver, serving setup scripts",
-    )
-    p_serve.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="Port used for webserver",
     )
     p_serve.set_defaults(func=command_serve)
 
