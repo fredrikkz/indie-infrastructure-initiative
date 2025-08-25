@@ -98,6 +98,10 @@ def get_proxmox_toml(mac):
             "url": f"http://indieinstaller.{domain}:8000/proxmox-first-boot",
         }
 
+        host_dict["post-installation-webhook"] = {
+            "url": f"http://indieinstaller.{domain}:8000/proxmox-post-install",
+        }
+
         proxmox_toml = tomlkit.document()
         proxmox_toml.update(host_dict)
         return proxmox_toml
@@ -436,6 +440,13 @@ def command_serve(args):
     @routes.get("/proxmox-first-boot")
     async def proxmox_first_boot(request: web.Request):
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
+        message = """#!/bin/bash"""
+        print(message)
+        return web.Response(text=message)
+
+    @routes.get("/proxmox-post-install")
+    async def proxmox_post_install(request: web.Request):
+        print(f"Request proxmox-post-install data for peer '{request.remote}':")
         message = """#!/bin/bash
 set -ex
 
