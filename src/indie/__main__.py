@@ -89,13 +89,13 @@ def get_proxmox_toml(mac):
         host_dict["disk-setup"] = {
             "disk-list": harddrives,
         }
-        if host_dict["use-raid1"]:
-            host_dict["disk-setup"] = host_dist["disk-setup"] | {
+        if host["use-raid1"]:
+            host_dict["disk-setup"] = host_dict["disk-setup"] | {
                 "filesystem": "zfs",
                 tomlkit.key(["zfs", "raid"]): "raid1",
             }
         else:
-            host_dict["disk-setup"] = host_dist["disk-setup"] | {
+            host_dict["disk-setup"] = host_dict["disk-setup"] | {
                 "filesystem": "ext4",
             }
 
