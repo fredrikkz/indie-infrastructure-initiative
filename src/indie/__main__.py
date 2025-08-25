@@ -81,21 +81,15 @@ def get_proxmox_toml(mac):
         )
 
         # TODO: Improve on this
-        harddrives = []
-        for x in ["sd"]:
-            for y in ["a", "b", "c", "d"]:
-                harddrives.append(x + y)
-
-        host_dict["disk-setup"] = {
-            "disk-list": harddrives,
-        }
         if host["use-raid1"]:
-            host_dict["disk-setup"] = host_dict["disk-setup"] | {
+            host_dict["disk-setup"] = {
+                "disk-list": ["sda", "sdb", "sdc", "sdd", "sde", "sdf"],
                 "filesystem": "zfs",
                 tomlkit.key(["zfs", "raid"]): "raid1",
             }
         else:
-            host_dict["disk-setup"] = host_dict["disk-setup"] | {
+            host_dict["disk-setup"] = {
+                "disk-list": ["sda"],
                 "filesystem": "ext4",
             }
 
