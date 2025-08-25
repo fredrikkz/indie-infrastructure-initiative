@@ -413,7 +413,7 @@ def command_serve(args):
 
     app = web.Application()
     app.add_routes(routes)
-    web.run_app(app, host="0.0.0.0", port=args.port)
+    web.run_app(app, port=args.port)
 
 
 def command_unknown(args, parser):
