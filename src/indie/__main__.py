@@ -15,6 +15,7 @@ import getpass
 from zoneinfo import available_timezones
 from aiohttp import web
 from passlib.hash import sha512_crypt
+from pathlib import Path
 from . import __version__
 
 valid_keyboard_layouts = [
@@ -45,16 +46,55 @@ valid_keyboard_layouts = [
     "tr",
 ]
 
-indie_toml_file = ".indie/indie.toml"
+indie_root_dir = Path.cwd() / ".indie"
+indie_toml_file = indie_root_dir / "indie.toml"
 indie_toml = tomlkit.document()
 
 
 def write_toml(data: dict):
     indie_toml.update(data)
 
-    os.makedirs(os.path.dirname(indie_toml_file), exist_ok=True)
+    indie_toml_file.parent.mkdir(parents=True, exist_ok=True)
     with open(indie_toml_file, "w", encoding="utf-8") as file:
         file.write(indie_toml.as_string())
+
+    toml_dict = indie_toml.unwrap()
+    domain = toml_dict["global"].pop("domain")
+    for host in toml_dict.get("host", []):
+        host_dict = {}
+        host_dict["global"] = toml_dict["global"]
+        host_dict["global"]["fqdn"] = host["hostname"] + "." + domain
+
+        host_dict["network"] = (
+            {"source": "from-dhcp"}
+            if host["use-dhcp"]
+            else {
+                "source": "from-answer",
+                "cidr": host["cidr"],
+                "dns": host["dns"],
+                "gateway": host["gateway"],
+            }
+        )
+
+        # TODO: Improve on this
+        harddrives = []
+        for x in ["sd"]:
+            for y in ["a", "b", "c", "d"]:
+                harddrives.append(x + y)
+
+        host_dict["disk-setup"] = {
+            "disk-list": harddrives,
+            "filesystem": "zfs",
+            tomlkit.key(["zfs", "raid"]): "raid1",
+        }
+
+        proxmox_toml = tomlkit.document()
+        proxmox_toml.update(host_dict)
+        proxmox_toml_file = indie_root_dir / "host" / f"{host['macaddress']}.toml"
+        proxmox_toml_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(proxmox_toml_file, "w", encoding="utf-8") as file:
+            file.write(proxmox_toml.as_string())
 
 
 def get_toml_default(key):
@@ -62,16 +102,6 @@ def get_toml_default(key):
         return indie_toml["global"][key]
     except KeyError:
         return None
-
-
-def has_toml_table(*args):
-    local = indie_toml
-    for arg in args:
-        try:
-            local = local[arg]
-        except KeyError:
-            return False
-    return True
 
 
 def get_keyboard(args):
@@ -92,11 +122,11 @@ def get_keyboard(args):
     return selected_keyboard_layout
 
 
-def get_countrycode(args):
-    selected_countrycode = str(args.countrycode or "")
-    while pycountry.countries.get(alpha_2=selected_countrycode) is None:
-        if selected_countrycode != "":
-            print(f"{selected_countrycode} is not a valid countrycode")
+def get_country(args):
+    selected_country = str(args.country or "")
+    while pycountry.countries.get(alpha_2=selected_country) is None:
+        if selected_country != "":
+            print(f"{selected_country} is not a valid countrycode")
         print(
             "Select ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list:"
         )
@@ -111,12 +141,12 @@ def get_countrycode(args):
             )
             do_suggest = True
 
-        selected_countrycode = str(input() or "")
-        if selected_countrycode == "" and do_suggest:
-            selected_countrycode = g.country
+        selected_country = str(input() or "")
+        if selected_country == "" and do_suggest:
+            selected_country = g.country
 
-    print(f"Selected countrycode: {selected_countrycode}")
-    return selected_countrycode
+    print(f"Selected countrycode: {selected_country}")
+    return selected_country.lower()
 
 
 def get_domain(args):
@@ -203,7 +233,7 @@ def command_begin(args):
         "domain": get_domain(args),
         "mailto": get_mailto(args),
         "keyboard": get_keyboard(args),
-        "countrycode": get_countrycode(args),
+        "country": get_country(args),
         "timezone": get_timezone(args),
         "root-password-hashed": get_password(args),
     }
@@ -212,15 +242,23 @@ def command_begin(args):
     )
 
 
+def is_hostproperty_in_use(prop, cmp):
+    data = indie_toml.unwrap()
+    for d in data.get("host", []):
+        if d[prop] == cmp:
+            return True
+    return False
+
+
 def get_hostname(args, domain):
     selected_hostname = args.hostname
     while not validators.domain(
         (selected_hostname or "") + "." + domain
-    ) or has_toml_table("host", selected_hostname):
+    ) or is_hostproperty_in_use("hostname", selected_hostname):
         if selected_hostname is not None:
             if not validators.domain((selected_hostname or "") + "." + domain):
                 print(f"{selected_hostname + '.' + domain} is not a valid domain")
-            elif has_toml_table("host", selected_hostname):
+            elif is_hostproperty_in_use("hostname", selected_hostname):
                 print(f"'{selected_hostname}' already in use")
         print("Select hostname:")
 
@@ -231,17 +269,20 @@ def get_hostname(args, domain):
     return selected_hostname
 
 
-# TODO: Also validate that the MAC address isn't used by any other hosts
 def get_macaddress(args):
     selected_macaddress = args.macaddress
-    while not validators.mac_address(selected_macaddress):
-        if selected_macaddress is not None:
+    while not validators.mac_address(selected_macaddress) or is_hostproperty_in_use(
+        "macaddress", selected_macaddress
+    ):
+        if not validators.mac_address(selected_macaddress):
             print(f"{selected_macaddress} is not a valid MAC address")
+        elif is_hostproperty_in_use("macaddress", selected_macaddress):
+            print(f"'{selected_macaddress}' already in use")
         print("Select MAC address:")
 
         selected_macaddress = input()
     print(f"Selected MAC address: {selected_macaddress}")
-    return selected_macaddress
+    return selected_macaddress.upper()
 
 
 def get_dhcp(args):
@@ -301,34 +342,35 @@ def command_addhost(args):
         "domain": get_domain(args),
         "mailto": get_mailto(args),
         "keyboard": get_keyboard(args),
-        "countrycode": get_countrycode(args),
+        "country": get_country(args),
         "timezone": get_timezone(args),
         "root-password-hashed": get_password(args),
     }
 
     addhost_dict = {
         "hostname": get_hostname(args, begin_dict["domain"]),
-        "network": {"macaddress": get_macaddress(args), "use-dhcp": get_dhcp(args)},
+        "macaddress": get_macaddress(args),
+        "use-dhcp": get_dhcp(args),
     }
 
-    if not addhost_dict["network"]["use-dhcp"]:
-        addhost_dict["network"] = addhost_dict["network"] | {
+    if not addhost_dict["use-dhcp"]:
+        addhost_dict = addhost_dict | {
             "cidr": get_cidr(args),
             "gateway": get_gateway(args),
             "dns": get_dns(args),
         }
 
     # We support running 'addhost' as the first command as well as 'begin', so we alter the global config if it's missing keys
-    to_write = {}
+    to_write = indie_toml.unwrap()
     for k, v in begin_dict.items():
-        default = get_toml_default(k)
+        default = to_write.get("global", {}).get(k)
         if default is None:
             to_write.setdefault("global", {})[k] = v
         elif v != default:
             # local override for this host
             addhost_dict[k] = v
 
-    to_write.setdefault("host", {})[addhost_dict["hostname"]] = addhost_dict
+    to_write.setdefault("host", []).append(addhost_dict)
     write_toml(to_write)
 
 
@@ -342,6 +384,10 @@ def command_unknown(args, parser):
     )
 
 
+def command_refresh(args):
+    write_toml({})
+
+
 def set_subparser_settings(subparser):
     subparser.add_argument(
         "--keyboard",
@@ -350,9 +396,9 @@ def set_subparser_settings(subparser):
         default=get_toml_default("keyboard"),
     )
     subparser.add_argument(
-        "--countrycode",
+        "--country",
         help="ISO 3166-1 alpha 2 countrycode to use (for example DE, FR, GB, or SE). See https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2 for full list.",
-        default=get_toml_default("countrycode"),
+        default=get_toml_default("country"),
     )
     subparser.add_argument(
         "--domain",
@@ -383,7 +429,7 @@ def main():
     except FileNotFoundError:
         pass
 
-    indie_toml.update({"indie":{"version":__version__}})
+    indie_toml.update({"indie": {"version": __version__}})
     parser = argparse.ArgumentParser(
         description=f"Indie Infrastructure Initiative\nVersion {__version__}\nhttps://github.com/fredrikkz/indie-infrastructure-initiative\n\nA tool to allow small indie game development studios to setup and maintain complex server infrastructure with ease",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -430,9 +476,19 @@ def main():
     )
     p_addhost.set_defaults(func=command_addhost)
 
+    # refresh
+    p_refresh = subparsers.add_parser(
+        "refresh",
+        help="If '.indie/indie.toml' is valid, refresh all other config files",
+    )
+    p_refresh.set_defaults(func=command_refresh)
+
     args = parser.parse_args()
 
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        print("\n")
 
 
 if __name__ == "__main__":
