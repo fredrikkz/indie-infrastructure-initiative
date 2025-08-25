@@ -444,9 +444,21 @@ def command_serve(args):
         print(message)
         return web.Response(text=message)
 
-    @routes.get("/proxmox-post-install")
+    @routes.post("/proxmox-post-install")
     async def proxmox_post_install(request: web.Request):
-        print(f"Request proxmox-post-install data for peer '{request.remote}':")
+        try:
+            request_data = json.loads(await request.text())
+        except json.JSONDecodeError as e:
+            return web.Response(
+                status=500,
+                text=f"Internal Server Error: failed to parse request contents: {e}",
+            )
+
+        print(
+            f"Request proxmox-post-install data for peer '{request.remote}':\n"
+            f"{json.dumps(request_data, indent=2)}"
+        )
+
         message = """#!/bin/bash
 set -ex
 
