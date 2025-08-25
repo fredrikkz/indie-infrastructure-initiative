@@ -76,6 +76,7 @@ def get_proxmox_toml(mac):
                 "cidr": host["cidr"],
                 "dns": host["dns"],
                 "gateway": host["gateway"],
+                tomlkit.key(["filter", "ID_NET_NAME_MAC"]): f"*{mac.replace(':','')}",
             }
         )
 
