@@ -1,0 +1,41 @@
+{
+  "$schema": {
+    "version": "1.0"
+  },
+  "product": {
+    "fullname": "Proxmox VE",
+    "product": "pve",
+    "enable_btrfs": true
+  },
+  "iso": {
+    "release": "8.2",
+    "isorelease": "2"
+  },
+  "dmi": {
+    "system": {
+      "serial": "900030XXXX",
+      "name": "RS700-E11-RS12U 1HE Intel Dual-CPU RI2112-ASXSN Server",
+      "sku": "SKU",
+      "uuid": "6fb36fd4-77a1-57e6-13ae-XXXXXXcb48d7"
+    },
+    "baseboard": {
+      "name": "Z13PP-D32 Series",
+      "asset_tag": "To be filled by O.E.M.",
+      "serial": "23041870000XXXX"
+    },
+    "chassis": {
+      "asset_tag": "To be filled by O.E.M.",
+      "serial": "I02308XXXX"
+    }
+  },
+  "network_interfaces": [
+    {
+      "link": "enp6s18",
+      "mac": "00:10:20:30:40:50"
+    },
+    {
+      "link": "enp6s19",
+	  "mac": "a8:60:b6:0e:e2:e0"
+    }
+  ]
+}

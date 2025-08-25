@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import os
-import logging
 import json
 import pathlib
 import sys
@@ -58,11 +57,15 @@ def write_toml(data: dict):
     with open(indie_toml_file, "w", encoding="utf-8") as file:
         file.write(indie_toml.as_string())
 
+
+def get_proxmox_toml(mac):
     toml_dict = indie_toml.unwrap()
-    domain = toml_dict["global"].pop("domain")
     for host in toml_dict.get("host", []):
-        host_dict = {}
-        host_dict["global"] = toml_dict["global"]
+        if host["macaddress"] != mac:
+            continue
+
+        domain = toml_dict["global"].pop("domain")
+        host_dict = {"global": toml_dict["global"]}
         host_dict["global"]["fqdn"] = host["hostname"] + "." + domain
 
         host_dict["network"] = (
@@ -90,11 +93,8 @@ def write_toml(data: dict):
 
         proxmox_toml = tomlkit.document()
         proxmox_toml.update(host_dict)
-        proxmox_toml_file = indie_root_dir / "host" / f"{host['macaddress']}.toml"
-        proxmox_toml_file.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(proxmox_toml_file, "w", encoding="utf-8") as file:
-            file.write(proxmox_toml.as_string())
+        return proxmox_toml
+    return None
 
 
 def get_toml_default(key):
@@ -282,7 +282,7 @@ def get_macaddress(args):
 
         selected_macaddress = input()
     print(f"Selected MAC address: {selected_macaddress}")
-    return selected_macaddress.upper()
+    return selected_macaddress.lower()
 
 
 def get_dhcp(args):
@@ -374,6 +374,48 @@ def command_addhost(args):
     write_toml(to_write)
 
 
+def command_serve(args):
+    routes = web.RouteTableDef()
+
+    @routes.post("/answer")
+    async def answer(request: web.Request):
+        try:
+            request_data = json.loads(await request.text())
+        except json.JSONDecodeError as e:
+            return web.Response(
+                status=500,
+                text=f"Internal Server Error: failed to parse request contents: {e}",
+            )
+
+        print(
+            f"Request data for peer '{request.remote}':\n"
+            f"{json.dumps(request_data, indent=2)}"
+        )
+
+        macs_tried = []
+        for nic in request_data.get("network_interfaces", []):
+            if "mac" not in nic:
+                continue
+            mac = nic["mac"].lower()
+            macs_tried.append(mac)
+            proxmox_toml = get_proxmox_toml(mac)
+            if proxmox_toml is not None:
+                answer = tomlkit.dumps(proxmox_toml)
+                print(
+                    f"Answer file for peer '{request.remote}':\n===BOF===\n{answer}\n===EOF==="
+                )
+                return web.Response(text=answer)
+
+        message = f"Failed to find toml for any of the following MAC addresses: {', '.join(map(str, macs_tried))}"
+
+        print(message)
+        return web.Response(status=500, text=f"Internal Server Error: {message}")
+
+    app = web.Application()
+    app.add_routes(routes)
+    web.run_app(app, host="0.0.0.0", port=args.port)
+
+
 def command_unknown(args, parser):
     parser.print_usage()
     s = parser.format_usage()
@@ -382,10 +424,6 @@ def command_unknown(args, parser):
     sys.exit(
         f"indie: error: argument {{{','.join(subcommands)}}}: invalid choice: '' (choose from {subcommands_quote_string})"
     )
-
-
-def command_refresh(args):
-    write_toml({})
 
 
 def set_subparser_settings(subparser):
@@ -476,12 +514,18 @@ def main():
     )
     p_addhost.set_defaults(func=command_addhost)
 
-    # refresh
-    p_refresh = subparsers.add_parser(
-        "refresh",
-        help="If '.indie/indie.toml' is valid, refresh all other config files",
+    # serve
+    p_serve = subparsers.add_parser(
+        "serve",
+        help="Starts a webserver, serving setup scripts",
     )
-    p_refresh.set_defaults(func=command_refresh)
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port used for webserver",
+    )
+    p_serve.set_defaults(func=command_serve)
 
     args = parser.parse_args()
 
