@@ -454,6 +454,8 @@ sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://do
 sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
 sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
+report_progress "Remove subscription popup..."
+sed -i 's|checked_command: function (orig_cmd) {|checked_command: function (orig_cmd) { orig_cmd(); return;|g' /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
 report_progress "Running apt update..."
 apt-get update
 report_progress "Running apt upgrade, this can take a while..."
