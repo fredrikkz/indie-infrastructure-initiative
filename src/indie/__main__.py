@@ -447,7 +447,7 @@ set -ex
 
 hostname=$(hostname)
 report_progress() {{
-    curl --json -d {json_data} http://indie.{domain}:8000/report-progress
+    curl --json {json_data} http://indie.{domain}:8000/report-progress
 }}
 report_progress "Re-writing apt sources..."
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
@@ -494,7 +494,7 @@ reboot
                 text=f"Internal Server Error: failed to parse request contents: {e}",
             )
 
-        print(f"{request_data.get('host','')}: {request_data.get('message','')}")
+        print(f"{request_data.get('hostname','')}: {request_data.get('message','')}")
         return web.Response(text="Report-progress message received")
 
     @routes.get("/proxmox-create-usb-installer")
