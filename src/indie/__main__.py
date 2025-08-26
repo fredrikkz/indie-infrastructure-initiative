@@ -95,11 +95,11 @@ def get_proxmox_toml(mac):
 
         host_dict["first-boot"] = {
             "source": "from-url",
-            "url": f"http://indieinstaller.{domain}:8000/proxmox-first-boot",
+            "url": f"http://indie.{domain}:8000/proxmox-first-boot",
         }
 
         host_dict["post-installation-webhook"] = {
-            "url": f"http://indieinstaller.{domain}:8000/proxmox-post-install",
+            "url": f"http://indie.{domain}:8000/proxmox-post-install",
         }
 
         proxmox_toml = tomlkit.document()
@@ -440,7 +440,16 @@ def command_serve(args):
     @routes.get("/proxmox-first-boot")
     async def proxmox_first_boot(request: web.Request):
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
-        message = """#!/bin/bash"""
+        message = """#!/bin/bash
+set -ex
+# Update apt sources
+sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
+sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
+sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
+sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
+apt-get update
+apt-get upgrade -y
+"""
         print(message)
         return web.Response(text=message)
 
@@ -456,12 +465,12 @@ def command_serve(args):
 
         print(
             f"Request proxmox-post-install data for peer '{request.remote}':\n"
-            f"{json.dumps(request_data, indent=2)}"
+            f"{json.dumps(request_data, indent=2)}\n"
+            f"Installation reported complete for {request_data.get('fqdn','')}, about to reboot\n"
         )
 
         message = """#!/bin/bash
 set -ex
-
 # Update apt sources
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
@@ -469,8 +478,6 @@ sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.
 sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
 apt-get update
 apt-get upgrade -y
-
-# Remove subscription
 """
         print(message)
         return web.Response(text=message)
@@ -495,7 +502,7 @@ fatlabel $1 "AUTOPROXMOX"
 
 # Get ISO
 wget https://enterprise.proxmox.com/iso/{iso_name}.iso
-proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "http://indieinstaller.{domain}:8000/proxmox-answer" --output {iso_name}-auto.iso
+proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "http://indie.{domain}:8000/proxmox-answer" --output {iso_name}-auto.iso
 dd bs=1M conv=fdatasync if=./{iso_name}-auto.iso of=$1
 rm {iso_name}.iso
 rm {iso_name}-auto.iso
