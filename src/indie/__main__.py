@@ -440,17 +440,30 @@ def command_serve(args):
     @routes.get("/proxmox-first-boot")
     async def proxmox_first_boot(request: web.Request):
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
-        message = """#!/bin/bash
+        domain = get_toml_default("domain")
+        message = f"""#!/bin/bash
 set -ex
-# Update apt sources
+
+hostname=$(hostname)
+report_progress() {
+    local message="$1"
+    curl --json -d "{\"hostname\":\"$hostname\",\"message\":\"$message\"} http://indie.{domain}:8000/report-progress"
+}
+report_progress "Re-writing apt sources..."
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
 sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
+report_progress "Running apt update..."
 apt-get update
+report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
+report_progress "Running apt purge proxmox-first-boot..."
+apt purge proxmox-first-boot
+report_progress "Script in first-boot completed successfully, server will now reboot a final time"
+reboot
 """
-        print(message)
+        # print(message)
         return web.Response(text=message)
 
     @routes.post("/proxmox-post-install")
@@ -466,21 +479,23 @@ apt-get upgrade -y
         print(
             f"Request proxmox-post-install data for peer '{request.remote}':\n"
             f"{json.dumps(request_data, indent=2)}\n"
-            f"Installation reported complete for {request_data.get('fqdn','')}, about to reboot\n"
+            f"Installation reported complete for {request_data.get('fqdn','')}, about to reboot"
         )
 
-        message = """#!/bin/bash
-set -ex
-# Update apt sources
-sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
-sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
-sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
-sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
-apt-get update
-apt-get upgrade -y
-"""
-        print(message)
-        return web.Response(text=message)
+        return web.Response(text="Proxmox post-install message received")
+
+    @routes.post("/report-progress")
+    async def report_progress(request: web.Request):
+        try:
+            request_data = json.loads(await request.text())
+        except json.JSONDecodeError as e:
+            return web.Response(
+                status=500,
+                text=f"Internal Server Error: failed to parse request contents: {e}",
+            )
+
+        print(f"{request_data.get('host','')}: {request_data.get('message','')}")
+        return web.Response(text="Report-progress message received")
 
     @routes.get("/proxmox-create-usb-installer")
     async def proxmox_create_usb_installer(request: web.Request):
