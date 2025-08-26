@@ -441,14 +441,14 @@ def command_serve(args):
     async def proxmox_first_boot(request: web.Request):
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
         domain = get_toml_default("domain")
+        json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
         message = f"""#!/bin/bash
 set -ex
 
 hostname=$(hostname)
-report_progress() {
-    local message="$1"
-    curl --json -d "{\"hostname\":\"$hostname\",\"message\":\"$message\"} http://indie.{domain}:8000/report-progress"
-}
+report_progress() {{
+    curl --json -d {json_data} http://indie.{domain}:8000/report-progress
+}}
 report_progress "Re-writing apt sources..."
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
