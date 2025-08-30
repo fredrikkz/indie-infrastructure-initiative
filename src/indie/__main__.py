@@ -11,11 +11,18 @@ import pycountry
 import validators
 import tzlocal
 import getpass
-from zoneinfo import available_timezones
+import datetime
+import ssl
 from aiohttp import web
+from zoneinfo import available_timezones
 from passlib.hash import sha512_crypt
 from pathlib import Path
 from . import __version__
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
+from cryptography.hazmat.primitives import hashes
 
 valid_keyboard_layouts = [
     "de",
@@ -49,6 +56,9 @@ indie_root_dir = Path.cwd() / ".indie"
 indie_toml_file = indie_root_dir / "indie.toml"
 indie_toml = tomlkit.document()
 
+private_key_pem_file = indie_root_dir / "private_key.pem"
+cert_pem_file = indie_root_dir / "cert.pem"
+
 
 def write_toml(data: dict):
     indie_toml.update(data)
@@ -65,6 +75,7 @@ def get_proxmox_toml(mac):
             continue
 
         domain = toml_dict["global"].pop("domain")
+        fingerprint = toml_dict["global"].pop("cert-fingerprint")
         host_dict = {"global": toml_dict["global"]}
         host_dict["global"]["fqdn"] = host["hostname"] + "." + domain
 
@@ -95,11 +106,13 @@ def get_proxmox_toml(mac):
 
         host_dict["first-boot"] = {
             "source": "from-url",
-            "url": f"http://indie.{domain}:8000/proxmox-first-boot",
+            "url": f"https://indie.{domain}:8000/proxmox-first-boot",
+            "cert-fingerprint": fingerprint,
         }
 
         host_dict["post-installation-webhook"] = {
-            "url": f"http://indie.{domain}:8000/proxmox-post-install",
+            "url": f"https://indie.{domain}:8000/proxmox-post-install",
+            "cert-fingerprint": fingerprint,
         }
 
         proxmox_toml = tomlkit.document()
@@ -113,6 +126,61 @@ def get_toml_default(key):
         return indie_toml["global"][key]
     except KeyError:
         return None
+
+
+def generate_cert_and_ssh_keys_if_not_present():
+    if private_key_pem_file.is_file():
+        return
+
+    private_key = ed25519.Ed25519PrivateKey.generate()
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COUNTRY_NAME, get_toml_default("country")),
+            x509.NameAttribute(NameOID.EMAIL_ADDRESS, get_toml_default("mailto")),
+            x509.NameAttribute(
+                NameOID.LOCALITY_NAME,
+                get_toml_default("timezone").split("/")[1].replace("_", " "),
+            ),
+            x509.NameAttribute(NameOID.COMMON_NAME, get_toml_default("domain")),
+        ]
+    )
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+        .not_valid_after(
+            # Our certificate will be valid for 100 years
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(days=365 * 100)
+        )
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(get_toml_default("domain"))]),
+            critical=False,
+        )
+        .sign(private_key, None)
+    )
+
+    private_key_pem_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(private_key_pem_file, "wb") as file:
+        file.write(
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+
+    cert_pem_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cert_pem_file, "wb") as file:
+        file.write(cert.public_bytes(serialization.Encoding.PEM))
+
+    fingerprint = cert.fingerprint(hashes.SHA256())
+    to_write = indie_toml.unwrap()
+    to_write["global"]["cert-fingerprint"] = fingerprint.hex(":")
+    write_toml(to_write)
 
 
 def get_keyboard(args):
@@ -169,7 +237,7 @@ def get_domain(args):
 
         selected_domain = input()
     print(f"Selected domain: {selected_domain}")
-    return selected_domain
+    return selected_domain.lower()
 
 
 def get_mailto(args):
@@ -235,6 +303,8 @@ def get_password(args):
         if not sha512_crypt.verify(getpass.getpass(), selected_password):
             print("Entered passwords didn't match, try again")
             selected_password = None
+            continue
+
     print(f"Selected password hash: {selected_password}")
     return selected_password
 
@@ -251,6 +321,7 @@ def command_begin(args):
     write_toml(
         {"global": begin_dict},
     )
+    generate_cert_and_ssh_keys_if_not_present()
 
 
 def is_hostproperty_in_use(prop, cmp):
@@ -398,6 +469,7 @@ def command_addhost(args):
 
     to_write.setdefault("host", []).append(addhost_dict)
     write_toml(to_write)
+    generate_cert_and_ssh_keys_if_not_present()
 
 
 def command_serve(args):
@@ -447,7 +519,7 @@ set -ex
 
 hostname=$(hostname)
 report_progress() {{
-    curl --json {json_data} http://indie.{domain}:8000/report-progress
+    curl --json {json_data} https://indie.{domain}:8000/report-progress
 }}
 report_progress "Re-writing apt sources..."
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
@@ -504,6 +576,7 @@ reboot
         print(f"Request proxmox-create-usb-installer for peer '{request.remote}':")
         iso_name = "proxmox-ve_9.0-1"
         domain = get_toml_default("domain")
+        fingerprint = get_toml_default("cert-fingerprint")
         message = f"""#!/bin/bash
 set -ex
 if [[ $# -ne 1 ]]; then
@@ -519,7 +592,7 @@ fatlabel $1 "AUTOPROXMOX"
 
 # Get ISO
 wget https://enterprise.proxmox.com/iso/{iso_name}.iso
-proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "http://indie.{domain}:8000/proxmox-answer" --output {iso_name}-auto.iso
+proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "https://indie.{domain}:8000/proxmox-answer" --cert-fingerprint "{fingerprint}" --output {iso_name}-auto.iso
 dd bs=1M conv=fdatasync if=./{iso_name}-auto.iso of=$1
 rm {iso_name}.iso
 rm {iso_name}-auto.iso
@@ -529,7 +602,9 @@ rm {iso_name}-auto.iso
 
     app = web.Application()
     app.add_routes(routes)
-    web.run_app(app, port=8000)
+    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ssl_context.load_cert_chain(cert_pem_file, private_key_pem_file)
+    web.run_app(app, port=8000, ssl_context=ssl_context)
 
 
 def command_unknown(args, parser):
