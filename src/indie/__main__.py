@@ -59,6 +59,9 @@ indie_toml = tomlkit.document()
 private_key_pem_file = indie_root_dir / "private_key.pem"
 cert_pem_file = indie_root_dir / "cert.pem"
 
+private_key_ssh_file = indie_root_dir / "id_ed25519"
+public_key_ssh_file = indie_root_dir / "id_ed25519.pub"
+
 
 def write_toml(data: dict):
     indie_toml.update(data)
@@ -177,9 +180,30 @@ def generate_cert_and_ssh_keys_if_not_present():
     with open(cert_pem_file, "wb") as file:
         file.write(cert.public_bytes(serialization.Encoding.PEM))
 
+    private_key_ssh_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(private_key_ssh_file, "wb") as file:
+        file.write(
+            private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.OpenSSH,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+        )
+
+    public_key_ssh_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(public_key_ssh_file, "wb") as file:
+        file.write(
+            private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.OpenSSH,
+                format=serialization.PublicFormat.OpenSSH,
+            )
+        )
+
     fingerprint = cert.fingerprint(hashes.SHA256())
     to_write = indie_toml.unwrap()
     to_write["global"]["cert-fingerprint"] = fingerprint.hex(":")
+    with open(public_key_ssh_file, "r") as file:
+        to_write["global"]["root-ssh-keys"] = [file.read()]
     write_toml(to_write)
 
 
