@@ -13,6 +13,7 @@ import tzlocal
 import getpass
 import datetime
 import ssl
+import uuid
 from aiohttp import web
 from zoneinfo import available_timezones
 from passlib.hash import sha512_crypt
@@ -78,11 +79,12 @@ def get_proxmox_toml(mac):
             continue
 
         domain = toml_dict["global"].pop("domain")
+        token = toml_dict["global"].pop("https-access-token")
         fingerprint = toml_dict["global"].pop("cert-fingerprint")
-        host_dict = {"global": toml_dict["global"]}
-        host_dict["global"]["fqdn"] = host["hostname"] + "." + domain
+        to_write = {"global": toml_dict["global"]}
+        to_write["global"]["fqdn"] = host["hostname"] + "." + domain
 
-        host_dict["network"] = (
+        to_write["network"] = (
             {"source": "from-dhcp"}
             if host["use-dhcp"]
             else {
@@ -96,30 +98,30 @@ def get_proxmox_toml(mac):
 
         # TODO: Improve on this
         if host["use-raid1"]:
-            host_dict["disk-setup"] = {
+            to_write["disk-setup"] = {
                 "disk-list": ["sda", "sdb", "sdc", "sdd", "sde", "sdf"],
                 "filesystem": "zfs",
                 tomlkit.key(["zfs", "raid"]): "raid1",
             }
         else:
-            host_dict["disk-setup"] = {
+            to_write["disk-setup"] = {
                 "disk-list": ["sda"],
                 "filesystem": "ext4",
             }
 
-        host_dict["first-boot"] = {
+        to_write["first-boot"] = {
             "source": "from-url",
-            "url": f"https://indie.{domain}:8000/proxmox-first-boot",
+            "url": f"https://indie.{domain}:8000/proxmox-first-boot?token={token}",
             "cert-fingerprint": fingerprint,
         }
 
-        host_dict["post-installation-webhook"] = {
-            "url": f"https://indie.{domain}:8000/proxmox-post-install",
+        to_write["post-installation-webhook"] = {
+            "url": f"https://indie.{domain}:8000/proxmox-post-install?token={token}",
             "cert-fingerprint": fingerprint,
         }
 
         proxmox_toml = tomlkit.document()
-        proxmox_toml.update(host_dict)
+        proxmox_toml.update(to_write)
         return proxmox_toml
     return None
 
@@ -333,6 +335,14 @@ def get_password(args):
     return selected_password
 
 
+def get_https_access_token(args):
+    selected_https_access_token = args.https_access_token
+    while not validators.uuid(selected_https_access_token):
+        selected_https_access_token = str(uuid.uuid4())
+    print(f"Selected https_access_token: {selected_https_access_token}")
+    return selected_https_access_token.lower()
+
+
 def command_begin(args):
     begin_dict = {
         "domain": get_domain(args),
@@ -341,6 +351,7 @@ def command_begin(args):
         "country": get_country(args),
         "timezone": get_timezone(args),
         "root-password-hashed": get_password(args),
+        "https-access-token": get_https_access_token(args),
     }
     write_toml(
         {"global": begin_dict},
@@ -380,10 +391,11 @@ def get_macaddress(args):
     while not validators.mac_address(selected_macaddress) or is_hostproperty_in_use(
         "macaddress", selected_macaddress
     ):
-        if not validators.mac_address(selected_macaddress):
-            print(f"{selected_macaddress} is not a valid MAC address")
-        elif is_hostproperty_in_use("macaddress", selected_macaddress):
-            print(f"'{selected_macaddress}' already in use")
+        if selected_macaddress is not None:
+            if not validators.mac_address(selected_macaddress):
+                print(f"{selected_macaddress} is not a valid MAC address")
+            elif is_hostproperty_in_use("macaddress", selected_macaddress):
+                print(f"'{selected_macaddress}' already in use")
         print("Select MAC address:")
 
         selected_macaddress = input()
@@ -465,6 +477,7 @@ def command_addhost(args):
         "country": get_country(args),
         "timezone": get_timezone(args),
         "root-password-hashed": get_password(args),
+        "https-access-token": get_https_access_token(args),
     }
 
     addhost_dict = {
@@ -498,9 +511,16 @@ def command_addhost(args):
 
 def command_serve(args):
     routes = web.RouteTableDef()
+    token = get_toml_default("https-access-token")
+    print(f"Serving requests for {token}...")
 
     @routes.post("/proxmox-answer")
     async def proxmox_answer(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
         try:
             request_data = json.loads(await request.text())
         except json.JSONDecodeError as e:
@@ -535,6 +555,11 @@ def command_serve(args):
 
     @routes.get("/proxmox-first-boot")
     async def proxmox_first_boot(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
         domain = get_toml_default("domain")
         json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
@@ -543,7 +568,7 @@ set -ex
 
 hostname=$(hostname)
 report_progress() {{
-    curl --json {json_data} https://indie.{domain}:8000/report-progress
+    curl --insecure --json {json_data} https://indie.{domain}:8000/report-progress?token={token}
 }}
 report_progress "Re-writing apt sources..."
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
@@ -561,11 +586,15 @@ apt purge proxmox-first-boot
 report_progress "Script in first-boot completed successfully, server will now reboot a final time"
 reboot
 """
-        # print(message)
         return web.Response(text=message)
 
     @routes.post("/proxmox-post-install")
     async def proxmox_post_install(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
         try:
             request_data = json.loads(await request.text())
         except json.JSONDecodeError as e:
@@ -584,6 +613,11 @@ reboot
 
     @routes.post("/report-progress")
     async def report_progress(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
         try:
             request_data = json.loads(await request.text())
         except json.JSONDecodeError as e:
@@ -597,6 +631,11 @@ reboot
 
     @routes.get("/proxmox-create-usb-installer")
     async def proxmox_create_usb_installer(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
         print(f"Request proxmox-create-usb-installer for peer '{request.remote}':")
         iso_name = "proxmox-ve_9.0-1"
         domain = get_toml_default("domain")
@@ -616,7 +655,7 @@ fatlabel $1 "AUTOPROXMOX"
 
 # Get ISO
 wget https://enterprise.proxmox.com/iso/{iso_name}.iso
-proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "https://indie.{domain}:8000/proxmox-answer" --cert-fingerprint "{fingerprint}" --output {iso_name}-auto.iso
+proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "https://indie.{domain}:8000/proxmox-answer?token={token}" --cert-fingerprint "{fingerprint}" --output {iso_name}-auto.iso
 dd bs=1M conv=fdatasync if=./{iso_name}-auto.iso of=$1
 rm {iso_name}.iso
 rm {iso_name}-auto.iso
@@ -670,6 +709,11 @@ def set_subparser_settings(subparser):
         "--root-password-hashed",
         default=get_toml_default("root-password-hashed"),
         help="SHA512 password hash, compatible with '/etc/shadow'",
+    )
+    subparser.add_argument(
+        "--https-access-token",
+        default=get_toml_default("https-access-token"),
+        help="A UUID to limit access to the https webserver when running 'indie serve'",
     )
 
 
