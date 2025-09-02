@@ -134,53 +134,56 @@ def get_toml_default(key):
 
 
 def generate_cert_and_ssh_keys_if_not_present():
-    if private_key_pem_file.is_file():
-        return
-
-    private_key = ed25519.Ed25519PrivateKey.generate()
-    subject = issuer = x509.Name(
-        [
-            x509.NameAttribute(NameOID.COUNTRY_NAME, get_toml_default("country")),
-            x509.NameAttribute(NameOID.EMAIL_ADDRESS, get_toml_default("mailto")),
-            x509.NameAttribute(
-                NameOID.LOCALITY_NAME,
-                get_toml_default("timezone").split("/")[1].replace("_", " "),
-            ),
-            x509.NameAttribute(NameOID.COMMON_NAME, get_toml_default("domain")),
-        ]
-    )
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
-        .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-        .not_valid_after(
-            # Our certificate will be valid for 100 years
-            datetime.datetime.now(datetime.timezone.utc)
-            + datetime.timedelta(days=365 * 100)
+    if private_key_pem_file.is_file() and cert_pem_file.is_file():
+        with open(private_key_pem_file, "rb") as file:
+            private_key = serialization.load_pem_private_key(file.read(), None)
+        with open(cert_pem_file, "rb") as file:
+            cert = x509.load_pem_x509_certificate(file.read())
+    else:
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        subject = issuer = x509.Name(
+            [
+                x509.NameAttribute(NameOID.COUNTRY_NAME, get_toml_default("country")),
+                x509.NameAttribute(NameOID.EMAIL_ADDRESS, get_toml_default("mailto")),
+                x509.NameAttribute(
+                    NameOID.LOCALITY_NAME,
+                    get_toml_default("timezone").split("/")[1].replace("_", " "),
+                ),
+                x509.NameAttribute(NameOID.COMMON_NAME, get_toml_default("domain")),
+            ]
         )
-        .add_extension(
-            x509.SubjectAlternativeName([x509.DNSName(get_toml_default("domain"))]),
-            critical=False,
-        )
-        .sign(private_key, None)
-    )
-
-    private_key_pem_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(private_key_pem_file, "wb") as file:
-        file.write(
-            private_key.private_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PrivateFormat.PKCS8,
-                encryption_algorithm=serialization.NoEncryption(),
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
+            .not_valid_after(
+                # Our certificate will be valid for 100 years
+                datetime.datetime.now(datetime.timezone.utc)
+                + datetime.timedelta(days=365 * 100)
             )
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(get_toml_default("domain"))]),
+                critical=False,
+            )
+            .sign(private_key, None)
         )
 
-    cert_pem_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(cert_pem_file, "wb") as file:
-        file.write(cert.public_bytes(serialization.Encoding.PEM))
+        private_key_pem_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(private_key_pem_file, "wb") as file:
+            file.write(
+                private_key.private_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+            )
+
+        cert_pem_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(cert_pem_file, "wb") as file:
+            file.write(cert.public_bytes(serialization.Encoding.PEM))
 
     private_key_ssh_file.parent.mkdir(parents=True, exist_ok=True)
     with open(private_key_ssh_file, "wb") as file:
