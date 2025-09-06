@@ -14,6 +14,7 @@ import getpass
 import datetime
 import ssl
 import uuid
+import math
 from aiohttp import web
 from zoneinfo import available_timezones
 from passlib.hash import sha512_crypt
@@ -425,7 +426,9 @@ def get_cidr(args):
     while not validators.ip_address.ipv4(selected_cidr, cidr=True, strict=True):
         if selected_cidr is not None:
             print(f"{selected_cidr} is not a valid CIDR")
-        print("Select IP address in CIDR format (for example '192.168.1.10/24'):")
+        print(
+            "Select static IP address in CIDR format (for example '192.168.0.123/24'):"
+        )
 
         selected_cidr = input()
     print(f"Selected cidr: {selected_cidr}")
@@ -437,7 +440,7 @@ def get_gateway(args):
     while not validators.ip_address.ipv4(selected_gateway, cidr=False):
         if selected_gateway is not None:
             print(f"{selected_gateway} is not a valid IP address")
-        print("Select gateway server IP address (for example '192.168.1.10'):")
+        print("Select gateway server IP address (for example '192.168.0.1'):")
 
         selected_gateway = input()
     print(f"Selected gateway: {selected_gateway}")
@@ -472,6 +475,21 @@ def get_raid(args):
     return selected_use_raid
 
 
+def get_internal_ip(args):
+    selected_internal_ip = args.internal_ip
+    to_test = 0
+    while not validators.ip_address.ipv4(
+        selected_internal_ip, cidr=False
+    ) or is_hostproperty_in_use("internal-ip", selected_internal_ip):
+        to_test = to_test + 1
+        major = math.trunc(to_test / 256)
+        minor = to_test - major * 256
+        selected_internal_ip = f"10.111.{major}.{minor}"
+
+    print(f"Selected internal IP: {selected_internal_ip}")
+    return selected_internal_ip
+
+
 def command_addhost(args):
     begin_dict = {
         "domain": get_domain(args),
@@ -488,6 +506,7 @@ def command_addhost(args):
         "macaddress": get_macaddress(args),
         "use-dhcp": get_dhcp(args),
         "use-raid1": get_raid(args),
+        "internal-ip": get_internal_ip(args),
     }
 
     if not addhost_dict["use-dhcp"]:
@@ -639,6 +658,7 @@ EOF
 report_progress "Restarting network..."
 systemctl restart networking
 
+report_progress "Done"
 # report_progress "Running apt purge proxmox-first-boot..."
 # apt purge proxmox-first-boot
 # report_progress "Script in first-boot completed successfully, server will now reboot a final time"
@@ -844,11 +864,11 @@ def main():
     )
     p_addhost.add_argument(
         "--cidr",
-        help="If not using DHCP, IP address in CIDR notation, for example 192.168.1.10/24",
+        help="If not using DHCP, static IP address of the host in CIDR notation, for example 192.168.0.123/24.",
     )
     p_addhost.add_argument(
         "--gateway",
-        help="If not using DHCP, IP address of gateway server, for example 192.168.1.10",
+        help="If not using DHCP, IP address of gateway server, for example 192.168.0.1",
     )
     p_addhost.add_argument(
         "--dns",
@@ -858,6 +878,10 @@ def main():
         "--use-raid1",
         type=bool,
         help="If true, use RAID1 (requires multiple harddrives or install of host will fail)",
+    )
+    p_addhost.add_argument(
+        "--internal-ip",
+        help="Internal IP of host, in the 'indie' virtual bridge, expected to be on the form 10.111.XXX.YYY",
     )
     p_addhost.set_defaults(func=command_addhost)
 
