@@ -584,23 +584,6 @@ def command_serve(args):
             )
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
         domain = get_toml_default("domain")
-        message = f"""#!/bin/bash
-set -ex
-wget --no-check-certificate -O indie-first-boot.sh https://indie.{domain}:8000/proxmox-first-boot-script?token={token}
-chmox +x ./indie-first-boot.sh
-./indie-first-boot.sh
-"""
-        return web.Response(text=message)
-
-    @routes.get("/proxmox-first-boot-script")
-    async def proxmox_first_boot_script(request: web.Request):
-        if request.query.get("token", "") != token:
-            return web.Response(
-                status=401,
-                text=f"Unauthorized",
-            )
-        print(f"Request proxmox-first-boot-script data for peer '{request.remote}':")
-        domain = get_toml_default("domain")
         json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
         message = f"""#!/bin/bash
 set -ex
@@ -664,6 +647,7 @@ report_progress "Done"
 # report_progress "Script in first-boot completed successfully, server will now reboot a final time"
 # reboot
 """
+        print(message)
         return web.Response(text=message)
 
     @routes.get("/get-info")
