@@ -565,6 +565,23 @@ def command_serve(args):
             )
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
         domain = get_toml_default("domain")
+        message = f"""#!/bin/bash
+set -ex
+wget --no-check-certificate -O indie-first-boot.sh https://indie.{domain}:8000/proxmox-first-boot-script?token={token}
+chmox +x ./indie-first-boot.sh
+./indie-first-boot.sh
+"""
+        return web.Response(text=message)
+
+    @routes.get("/proxmox-first-boot-script")
+    async def proxmox_first_boot_script(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
+        print(f"Request proxmox-first-boot-script data for peer '{request.remote}':")
+        domain = get_toml_default("domain")
         json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
         message = f"""#!/bin/bash
 set -ex
@@ -573,6 +590,24 @@ hostname=$(hostname)
 report_progress() {{
     curl --insecure --json {json_data} https://indie.{domain}:8000/report-progress?token={token}
 }}
+# NOTE: Enable firewall as soon as possible, we'll however replace it with OpenWRT soon
+physical_network_interface=$(find /sys/class/net -type l -not -lname '*virtual*' -printf '%f;' | cut -d';' -f1)
+report_progress "Physical network interface identified as $physical_network_interface"
+report_progress "Configuring proxmox host firewall..."
+cat << EOF > /etc/pve/local/host.fw
+[OPTIONS]
+enable: 1
+[RULES]
+OUT ACCEPT -i $physical_network_interface -p tcp -dport 80,443,8000 -log nolog # http/https/indie webserver
+OUT ACCEPT -i $physical_network_interface -p udp -dport 53 -log nolog # DNS
+IN ACCEPT -i $physical_network_interface -p tcp -dport 22 -log nolog # proxmox SSH
+IN ACCEPT -i $physical_network_interface -p tcp -dport 8006 -log nolog # proxmox GUI
+EOF
+report_progress "Starting proxmox host firewall..."
+pve-firewall start
+proxmox_firewall_status=$(pve-firewall status)
+report_progress "Firewall status reported as: $proxmox_firewall_status"
+
 report_progress "Re-writing apt sources..."
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
@@ -584,10 +619,12 @@ report_progress "Running apt update..."
 apt-get update
 report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
-report_progress "Running apt purge proxmox-first-boot..."
-apt purge proxmox-first-boot
-report_progress "Script in first-boot completed successfully, server will now reboot a final time"
-reboot
+
+
+# report_progress "Running apt purge proxmox-first-boot..."
+# apt purge proxmox-first-boot
+# report_progress "Script in first-boot completed successfully, server will now reboot a final time"
+# reboot
 """
         return web.Response(text=message)
 
