@@ -621,10 +621,10 @@ report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
 
 report_progress "Fetching $hostname internal IP..."
-host_internal_ip=$(wget --no-check-certificate https://indie.{domain}:8000/get-info?token={token}&hostname=$hostname&attribute=internal-ip)
+host_internal_ip=$(wget --no-check-certificate -O - "https://indie.{domain}:8000/get-info?token={token}&hostname=$hostname&attribute=internal-ip")
 report_progress "Resolved $hostname internal IP as $host_internal_ip..."
-report_progress "Creating vm network bridge..."
-cat << EOF >> /etc/network/interfaces
+report_progress "Creating indie vm network bridge..."
+cat << EOF > /etc/network/interfaces.d/indie
 
 auto indiebr0
 iface indiebr0 inet static
@@ -636,6 +636,8 @@ iface indiebr0 inet static
         post-up   iptables -t nat -A POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
         post-down iptables -t nat -D POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
 EOF
+report_progress "Restarting network..."
+systemctl restart networking
 
 # report_progress "Running apt purge proxmox-first-boot..."
 # apt purge proxmox-first-boot
