@@ -594,7 +594,7 @@ report_progress() {{
 physical_network_interface=$(find /sys/class/net -type l -not -lname '*virtual*' -printf '%f;' | cut -d';' -f1)
 report_progress "Physical network interface identified as $physical_network_interface"
 report_progress "Configuring proxmox host firewall..."
-cat << EOF > /etc/pve/local/host.fw
+cat << EOF > /etc/pve/firewall/cluster.fw
 [OPTIONS]
 enable: 1
 [RULES]
@@ -620,6 +620,22 @@ apt-get update
 report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
 
+report_progress "Fetching $hostname internal IP..."
+host_internal_ip=$(wget --no-check-certificate https://indie.{domain}:8000/get-info?token={token}&hostname=$hostname&attribute=internal-ip)
+report_progress "Resolved $hostname internal IP as $host_internal_ip..."
+report_progress "Creating vm network bridge..."
+cat << EOF >> /etc/network/interfaces
+
+auto indiebr0
+iface indiebr0 inet static
+        address $host_internal_ip/16
+        bridge-ports none
+        bridge-stp off
+        bridge-fd 0
+        post-up echo 1 > /proc/sys/net/ipv4/ip_forward
+        post-up   iptables -t nat -A POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
+        post-down iptables -t nat -D POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
+EOF
 
 # report_progress "Running apt purge proxmox-first-boot..."
 # apt purge proxmox-first-boot
@@ -627,6 +643,31 @@ apt-get upgrade -y
 # reboot
 """
         return web.Response(text=message)
+
+    @routes.get("/get-info")
+    async def get_info(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
+        print(f"Request get-info data for peer '{request.remote}':")
+
+        hostname = request.query.get("hostname")
+        attribute = request.query.get("attribute")
+
+        toml_dict = indie_toml.unwrap()
+        for host in toml_dict.get("host", []):
+            if host["hostname"] != hostname:
+                continue
+            if attribute in host:
+                ret = host[attribute]
+                print(f"Returning '{ret}' for '{hostname}/{attribute}'...")
+                return web.Response(text=host[attribute])
+        return web.Response(
+            status=404,
+            text=f"Not Found",
+        )
 
     @routes.post("/proxmox-post-install")
     async def proxmox_post_install(request: web.Request):
