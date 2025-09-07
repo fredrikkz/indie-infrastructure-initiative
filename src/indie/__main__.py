@@ -586,9 +586,9 @@ def command_serve(args):
         domain = get_toml_default("domain")
         message = f"""#!/bin/bash
 set -ex
-wget --no-check-certificate -O ./indie-first-boot.sh https://indie.{domain}:8000/proxmox-first-boot-script?token={token}
-chmod +x ./indie-first-boot.sh
-(./indie-first-boot.sh 2>&1 | tee ./indie-first-boot.log) &
+wget --no-check-certificate -O ~/indie-first-boot.sh https://indie.{domain}:8000/proxmox-first-boot-script?token={token}
+chmod +x ~/indie-first-boot.sh
+(~/indie-first-boot.sh 2>&1 | tee ~/indie-first-boot.log) &
 """
         return web.Response(text=message)
 
@@ -624,6 +624,7 @@ IN ACCEPT -i $physical_network_interface -p tcp -dport 8006 -log nolog # proxmox
 EOF
 report_progress "Starting proxmox host firewall..."
 pve-firewall restart
+sleep 3
 proxmox_firewall_status=$(pve-firewall status)
 report_progress "Firewall status reported as: $proxmox_firewall_status"
 
@@ -638,15 +639,16 @@ report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
 
 report_progress "Enable ipv4 forwarding..."
-sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
-sysctl -p
+echo "net.ipv4.ip_forward=1" > /usr/lib/sysctl.d/99-indie.conf
+sysctl --system
 sysctl net.ipv4.ip_forward
 
 report_progress "Fetching $hostname internal IP..."
 host_internal_ip=$(wget --no-check-certificate -O - "https://indie.{domain}:8000/get-info?token={token}&hostname=$hostname&attribute=internal-ip")
 report_progress "Resolved $hostname internal IP as $host_internal_ip..."
 report_progress "Creating indie vm network bridge..."
-cat << EOF > /etc/network/interfaces.d/indie
+cat << EOF >> /etc/network/interfaces
+
 auto indiebr0
 iface indiebr0 inet static
         address $host_internal_ip/16
@@ -657,18 +659,22 @@ iface indiebr0 inet static
         post-down iptables -t nat -D POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
 EOF
 report_progress "Restarting network..."
-systemctl restart networking.service
+ifreload -a
+
+while ! ping -c 1 -W 1 86.54.11.1 &> /dev/null; do
+  echo "Waiting for network..."
+  sleep 1
+done
 
 report_progress "Remove subscription popup..."
 sed -i 's|checked_command: function (orig_cmd) {{|checked_command: function (orig_cmd) {{ orig_cmd(); return;|g' /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
 systemctl restart pveproxy.service
 
 report_progress "Running apt purge proxmox-first-boot..."
-apt purge proxmox-first-boot
+apt purge proxmox-first-boot -y
 
-report_progress "Done"
-# report_progress "Script in first-boot completed successfully, server will now reboot a final time"
-# reboot
+report_progress "Script in first-boot completed successfully, server will now reboot a final time"
+#reboot
 """
         print(message)
         return web.Response(text=message)
