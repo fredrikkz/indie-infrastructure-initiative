@@ -613,7 +613,7 @@ echo "y" | setsid pvenode acme account register indie {mailto} --directory "http
 echo "{api_data}" > ~/indie_plugin_dns_data
 pvenode acme plugin add dns indie_plugin --api {api} --data ~/indie_plugin_dns_data
 pvenode acme plugin config indie_plugin
-pvenode config set -acmedomain0 $hostname.{domain},plugin=indie_plugin
+pvenode config set --acme account=indie -acmedomain0 $hostname.{domain},plugin=indie_plugin
 pvenode acme cert order
 """
         json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
