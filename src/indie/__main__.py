@@ -584,6 +584,23 @@ def command_serve(args):
             )
         print(f"Request proxmox-first-boot data for peer '{request.remote}':")
         domain = get_toml_default("domain")
+        message = f"""#!/bin/bash
+set -ex
+wget --no-check-certificate -O ./indie-first-boot.sh https://indie.{domain}:8000/proxmox-first-boot-script?token={token}
+chmod +x ./indie-first-boot.sh
+(./indie-first-boot.sh 2>&1 | tee ./indie-first-boot.log) &
+"""
+        return web.Response(text=message)
+
+    @routes.get("/proxmox-first-boot-script")
+    async def proxmox_first_boot_script(request: web.Request):
+        if request.query.get("token", "") != token:
+            return web.Response(
+                status=401,
+                text=f"Unauthorized",
+            )
+        print(f"Request proxmox-first-boot-script data for peer '{request.remote}':")
+        domain = get_toml_default("domain")
         json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
         message = f"""#!/bin/bash
 set -ex
@@ -606,7 +623,7 @@ IN ACCEPT -i $physical_network_interface -p tcp -dport 22 -log nolog # proxmox S
 IN ACCEPT -i $physical_network_interface -p tcp -dport 8006 -log nolog # proxmox GUI
 EOF
 report_progress "Starting proxmox host firewall..."
-pve-firewall start
+pve-firewall restart
 proxmox_firewall_status=$(pve-firewall status)
 report_progress "Firewall status reported as: $proxmox_firewall_status"
 
@@ -615,35 +632,41 @@ sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://do
 sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
 sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
 sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
-report_progress "Remove subscription popup..."
-sed -i 's|checked_command: function (orig_cmd) {{|checked_command: function (orig_cmd) {{ orig_cmd(); return;|g' /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
 report_progress "Running apt update..."
 apt-get update
 report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
+
+report_progress "Enable ipv4 forwarding..."
+sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+sysctl -p
+sysctl net.ipv4.ip_forward
 
 report_progress "Fetching $hostname internal IP..."
 host_internal_ip=$(wget --no-check-certificate -O - "https://indie.{domain}:8000/get-info?token={token}&hostname=$hostname&attribute=internal-ip")
 report_progress "Resolved $hostname internal IP as $host_internal_ip..."
 report_progress "Creating indie vm network bridge..."
 cat << EOF > /etc/network/interfaces.d/indie
-
 auto indiebr0
 iface indiebr0 inet static
         address $host_internal_ip/16
         bridge-ports none
         bridge-stp off
         bridge-fd 0
-        post-up echo 1 > /proc/sys/net/ipv4/ip_forward
         post-up   iptables -t nat -A POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
         post-down iptables -t nat -D POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
 EOF
 report_progress "Restarting network..."
-systemctl restart networking
+systemctl restart networking.service
+
+report_progress "Remove subscription popup..."
+sed -i 's|checked_command: function (orig_cmd) {{|checked_command: function (orig_cmd) {{ orig_cmd(); return;|g' /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+systemctl restart pveproxy.service
+
+report_progress "Running apt purge proxmox-first-boot..."
+apt purge proxmox-first-boot
 
 report_progress "Done"
-# report_progress "Running apt purge proxmox-first-boot..."
-# apt purge proxmox-first-boot
 # report_progress "Script in first-boot completed successfully, server will now reboot a final time"
 # reboot
 """
