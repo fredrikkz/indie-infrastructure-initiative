@@ -127,9 +127,9 @@ def get_proxmox_toml(mac):
     return None
 
 
-def get_toml_default(key):
+def get_toml_default(key, table="global"):
     try:
-        return indie_toml["global"][key]
+        return indie_toml[table][key]
     except KeyError:
         return None
 
@@ -601,6 +601,21 @@ chmod +x ~/indie-first-boot.sh
             )
         print(f"Request proxmox-first-boot-script data for peer '{request.remote}':")
         domain = get_toml_default("domain")
+        api = get_toml_default("api", "acme")
+        if api is None:
+            api = ""
+        else:
+            mailto = get_toml_default("mailto")
+            api_data = get_toml_default("api-data", "acme")
+            api = f"""
+report_progress "Registering 'indie' ACME account (TODO: add cluster support)..."
+echo "y" | setsid pvenode acme account register indie {mailto} --directory "https://acme-v02.api.letsencrypt.org/directory"
+echo "{api_data}" > ~/indie_plugin_dns_data
+pvenode acme plugin add dns indie_plugin --api {api} --data ~/indie_plugin_dns_data
+pvenode acme plugin config indie_plugin
+pvenode config set -acmedomain0 $hostname.{domain},plugin=indie_plugin
+pvenode acme cert order
+"""
         json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
         message = f"""#!/bin/bash
 set -ex
@@ -638,6 +653,9 @@ apt-get update
 report_progress "Running apt upgrade, this can take a while..."
 apt-get upgrade -y
 
+report_progress "Installing vim..."
+apt install vim -y
+
 report_progress "Enable ipv4 forwarding..."
 echo "net.ipv4.ip_forward=1" > /usr/lib/sysctl.d/99-indie.conf
 sysctl --system
@@ -672,6 +690,8 @@ systemctl restart pveproxy.service
 
 report_progress "Running apt purge proxmox-first-boot..."
 apt purge proxmox-first-boot -y
+
+{api}
 
 report_progress "Script in first-boot completed successfully, server will now reboot a final time"
 #reboot
