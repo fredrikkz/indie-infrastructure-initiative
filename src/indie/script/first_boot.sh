@@ -3,7 +3,7 @@ set -ex
 
 hostname=$(hostname)
 report_progress() {{
-    curl --insecure --json "{{\"hostname\":\"$hostname\",\"message\":\"$1\"}}" https://indie.{domain}:8000/report-progress?token={token}
+    curl -sS -o /dev/null --insecure --json "{{\"hostname\":\"$hostname\",\"message\":\"$1\"}}" https://indie.{domain}:8000/report-progress?token={token}
 }}
 # NOTE: Enable firewall as soon as possible, we'll however replace it with OpenWRT soon
 physical_network_interface=$(find /sys/class/net -type l -not -lname '*virtual*' -printf '%f;' | cut -d';' -f1)
