@@ -23,6 +23,9 @@ Homepage = "https://github.com/fredrikkz/indie-infrastructure-initiative"
 [project.scripts]
 indie = "indie.__main__:main"
 
+[tool.setuptools.package-data]
+"indie.script" = ["*.sh"]
+
 [tool.bumpver]
 current_version = "0.1.34"
 version_pattern = "MAJOR.MINOR.PATCH"
