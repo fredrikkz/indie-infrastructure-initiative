@@ -650,12 +650,14 @@ def command_serve(args):
                 status=401,
                 text=f"Unauthorized",
             )
-        script_content = getscript(request.query.get("script", ""))
+        script_name = request.query.get("script", "")
+        script_content = getscript(script_name)
         if script_content is None:
             return web.Response(
                 status=404,
                 text=f"Not Found",
             )
+        print(f"Serving {script_name} as:\n{script_content}")
         return web.Response(text=script_content)
 
     @routes.get("/get-info")
