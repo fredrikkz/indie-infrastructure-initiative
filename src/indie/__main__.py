@@ -15,6 +15,7 @@ import datetime
 import ssl
 import uuid
 import math
+import importlib
 from aiohttp import web
 from zoneinfo import available_timezones
 from passlib.hash import sha512_crypt
@@ -112,7 +113,7 @@ def get_proxmox_toml(mac):
 
         to_write["first-boot"] = {
             "source": "from-url",
-            "url": f"https://indie.{domain}:8000/proxmox-first-boot?token={token}",
+            "url": f"https://indie.{domain}:8000/getscript?token={token}&script=first_boot_wrapper.sh",
             "cert-fingerprint": fingerprint,
         }
 
@@ -531,6 +532,73 @@ def command_addhost(args):
     generate_cert_and_ssh_keys_if_not_present()
 
 
+def getscript(script):
+    try:
+        text = importlib.resources.read_text("indie.script", script, errors="strict")
+
+        # TODO begin: Fix this mess, convert from TOML instead
+        mailto = get_toml_default("mailto")
+        token = get_toml_default("https-access-token")
+        domain = get_toml_default("domain")
+        api = get_toml_default("api", "acme")
+        iso_name = "proxmox-ve_9.0-1"
+        fingerprint = get_toml_default("cert-fingerprint")
+        if api is None:
+            api = ""
+        else:
+            api_data = get_toml_default("api-data", "acme")
+            api = f"""
+report_progress "Registering 'indie' ACME account (TODO: add cluster support)..."
+echo "y" | setsid pvenode acme account register indie {mailto} --directory "https://acme-v02.api.letsencrypt.org/directory"
+echo "{api_data}" > ~/indie_plugin_dns_data
+pvenode acme plugin add dns indie_plugin --api {api} --data ~/indie_plugin_dns_data
+pvenode acme plugin config indie_plugin
+pvenode config set --acme account=indie -acmedomain0 $hostname.{domain},plugin=indie_plugin
+pvenode acme cert order
+"""
+        # TODO end
+
+        to_replace = {
+            "token": token,
+            "domain": domain,
+            "api": api,
+            "mailto": mailto,
+            "iso_name": iso_name,
+            "fingerprint": fingerprint,
+        }
+
+        return text.format(**to_replace)
+    except Exception as e:
+        print(e)
+        return None
+    return text
+
+
+def command_getscript(args):
+    if args.script is None:
+        print(f"Available scripts:")
+        for f in importlib.resources.files("indie.script").iterdir():
+            if not f.is_file():
+                continue
+            print(f.name)
+        return
+
+    script_content = getscript(args.script)
+    if script_content is None:
+        sys.exit(f"indie: error: unable to find '{args.script}'")
+
+    if args.print:
+        print(script_content)
+        return
+
+    filename = args.script if args.file is None else args.file
+    try:
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(script_content)
+    except Exception as e:
+        sys.exit(f"indie: error: unable to write to file '{filename}'\n{e}")
+
+
 def command_serve(args):
     routes = web.RouteTableDef()
     token = get_toml_default("https-access-token")
@@ -575,129 +643,20 @@ def command_serve(args):
         print(message)
         return web.Response(status=500, text=f"Internal Server Error: {message}")
 
-    @routes.get("/proxmox-first-boot")
-    async def proxmox_first_boot(request: web.Request):
+    @routes.get("/getscript")
+    async def web_getscript(request: web.Request):
         if request.query.get("token", "") != token:
             return web.Response(
                 status=401,
                 text=f"Unauthorized",
             )
-        print(f"Request proxmox-first-boot data for peer '{request.remote}':")
-        domain = get_toml_default("domain")
-        message = f"""#!/bin/bash
-set -ex
-wget --no-check-certificate -O ~/indie-first-boot.sh https://indie.{domain}:8000/proxmox-first-boot-script?token={token}
-chmod +x ~/indie-first-boot.sh
-(~/indie-first-boot.sh 2>&1 | tee ~/indie-first-boot.log) &
-"""
-        return web.Response(text=message)
-
-    @routes.get("/proxmox-first-boot-script")
-    async def proxmox_first_boot_script(request: web.Request):
-        if request.query.get("token", "") != token:
+        script_content = getscript(request.query.get("script", ""))
+        if script_content is None:
             return web.Response(
-                status=401,
-                text=f"Unauthorized",
+                status=404,
+                text=f"Not Found",
             )
-        print(f"Request proxmox-first-boot-script data for peer '{request.remote}':")
-        domain = get_toml_default("domain")
-        api = get_toml_default("api", "acme")
-        if api is None:
-            api = ""
-        else:
-            mailto = get_toml_default("mailto")
-            api_data = get_toml_default("api-data", "acme")
-            api = f"""
-report_progress "Registering 'indie' ACME account (TODO: add cluster support)..."
-echo "y" | setsid pvenode acme account register indie {mailto} --directory "https://acme-v02.api.letsencrypt.org/directory"
-echo "{api_data}" > ~/indie_plugin_dns_data
-pvenode acme plugin add dns indie_plugin --api {api} --data ~/indie_plugin_dns_data
-pvenode acme plugin config indie_plugin
-pvenode config set --acme account=indie -acmedomain0 $hostname.{domain},plugin=indie_plugin
-pvenode acme cert order
-"""
-        json_data = '"{\\"hostname\\":\\"$hostname\\",\\"message\\":\\"$1\\"}"'
-        message = f"""#!/bin/bash
-set -ex
-
-hostname=$(hostname)
-report_progress() {{
-    curl --insecure --json {json_data} https://indie.{domain}:8000/report-progress?token={token}
-}}
-# NOTE: Enable firewall as soon as possible, we'll however replace it with OpenWRT soon
-physical_network_interface=$(find /sys/class/net -type l -not -lname '*virtual*' -printf '%f;' | cut -d';' -f1)
-report_progress "Physical network interface identified as $physical_network_interface"
-report_progress "Configuring proxmox host firewall..."
-cat << EOF > /etc/pve/firewall/cluster.fw
-[OPTIONS]
-enable: 1
-[RULES]
-OUT ACCEPT -i $physical_network_interface -p tcp -dport 80,443,8000 -log nolog # http/https/indie webserver
-OUT ACCEPT -i $physical_network_interface -p udp -dport 53 -log nolog # DNS
-IN ACCEPT -i $physical_network_interface -p tcp -dport 22 -log nolog # proxmox SSH
-IN ACCEPT -i $physical_network_interface -p tcp -dport 8006 -log nolog # proxmox GUI
-EOF
-report_progress "Starting proxmox host firewall..."
-pve-firewall restart
-sleep 3
-proxmox_firewall_status=$(pve-firewall status)
-report_progress "Firewall status reported as: $proxmox_firewall_status"
-
-report_progress "Re-writing apt sources..."
-sed -i 's|URIs: https://enterprise.proxmox.com/debian/ceph-squid|URIs: http://download.proxmox.com/debian/ceph-squid|g' /etc/apt/sources.list.d/ceph.sources
-sed -i 's|Components: enterprise|Components: no-subscription|g' /etc/apt/sources.list.d/ceph.sources
-sed -i 's|URIs: https://enterprise.proxmox.com/debian/pve|URIs: http://download.proxmox.com/debian/pve|g' /etc/apt/sources.list.d/pve-enterprise.sources
-sed -i 's|Components: pve-enterprise|Components: pve-no-subscription|g' /etc/apt/sources.list.d/pve-enterprise.sources
-report_progress "Running apt update..."
-apt-get update
-report_progress "Running apt upgrade, this can take a while..."
-apt-get upgrade -y
-
-report_progress "Installing vim..."
-apt install vim -y
-
-report_progress "Enable ipv4 forwarding..."
-echo "net.ipv4.ip_forward=1" > /usr/lib/sysctl.d/99-indie.conf
-sysctl --system
-sysctl net.ipv4.ip_forward
-
-report_progress "Fetching $hostname internal IP..."
-host_internal_ip=$(wget --no-check-certificate -O - "https://indie.{domain}:8000/get-info?token={token}&hostname=$hostname&attribute=internal-ip")
-report_progress "Resolved $hostname internal IP as $host_internal_ip..."
-report_progress "Creating indie vm network bridge..."
-cat << EOF >> /etc/network/interfaces
-
-auto indiebr0
-iface indiebr0 inet static
-        address $host_internal_ip/16
-        bridge-ports none
-        bridge-stp off
-        bridge-fd 0
-        post-up   iptables -t nat -A POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
-        post-down iptables -t nat -D POSTROUTING -s '10.111.0.0/16' -o $physical_network_interface -j MASQUERADE
-EOF
-report_progress "Restarting network..."
-ifreload -a
-
-while ! ping -c 1 -W 1 86.54.11.1 &> /dev/null; do
-  echo "Waiting for network..."
-  sleep 1
-done
-
-report_progress "Remove subscription popup..."
-sed -i 's|checked_command: function (orig_cmd) {{|checked_command: function (orig_cmd) {{ orig_cmd(); return;|g' /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
-systemctl restart pveproxy.service
-
-report_progress "Running apt purge proxmox-first-boot..."
-apt purge proxmox-first-boot -y
-
-{api}
-
-report_progress "Script in first-boot completed successfully, server will now reboot a final time"
-#reboot
-"""
-        print(message)
-        return web.Response(text=message)
+        return web.Response(text=script_content)
 
     @routes.get("/get-info")
     async def get_info(request: web.Request):
@@ -764,40 +723,6 @@ report_progress "Script in first-boot completed successfully, server will now re
 
         print(f"{request_data.get('hostname','')}: {request_data.get('message','')}")
         return web.Response(text="Report-progress message received")
-
-    @routes.get("/proxmox-create-usb-installer")
-    async def proxmox_create_usb_installer(request: web.Request):
-        if request.query.get("token", "") != token:
-            return web.Response(
-                status=401,
-                text=f"Unauthorized",
-            )
-        print(f"Request proxmox-create-usb-installer for peer '{request.remote}':")
-        iso_name = "proxmox-ve_9.0-1"
-        domain = get_toml_default("domain")
-        fingerprint = get_toml_default("cert-fingerprint")
-        message = f"""#!/bin/bash
-set -ex
-if [[ $# -ne 1 ]]; then
-    echo "Illegal number of parameters" >&2
-    exit 2
-fi
-
-apt install proxmox-auto-install-assistant -y
-
-# Prepare USB
-mkfs.vfat -I $1
-fatlabel $1 "AUTOPROXMOX"
-
-# Get ISO
-wget https://enterprise.proxmox.com/iso/{iso_name}.iso
-proxmox-auto-install-assistant prepare-iso {iso_name}.iso --fetch-from http --url "https://indie.{domain}:8000/proxmox-answer?token={token}" --cert-fingerprint "{fingerprint}" --output {iso_name}-auto.iso
-dd bs=1M conv=fdatasync if=./{iso_name}-auto.iso of=$1
-rm {iso_name}.iso
-rm {iso_name}-auto.iso
-"""
-        print(message)
-        return web.Response(text=message)
 
     app = web.Application()
     app.add_routes(routes)
@@ -924,6 +849,29 @@ def main():
         help="Starts a webserver, serving setup scripts",
     )
     p_serve.set_defaults(func=command_serve)
+
+    # getscript
+    p_getscript = subparsers.add_parser(
+        "getscript",
+        help="Writes a script to file or prints it to stdout",
+    )
+    p_getscript.add_argument(
+        "-p",
+        "--print",
+        action="store_true",
+        help="If set, prints to 'stdout' instead of writing to file",
+    )
+    p_getscript.add_argument(
+        "-f",
+        "--file",
+        help="If set, saves to 'file' instead of script name",
+    )
+    p_getscript.add_argument(
+        "-s",
+        "--script",
+        help="Name of script to get. If omitted, list all available scripts instead",
+    )
+    p_getscript.set_defaults(func=command_getscript)
 
     args = parser.parse_args()
 
